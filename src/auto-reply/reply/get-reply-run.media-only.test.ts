@@ -5011,6 +5011,7 @@ describe("runPreparedReply media-only handling", () => {
     "admits a live configured owner's management capability from a Slack %s conversation",
     async (chatType) => {
       const params = ownerParams();
+      params.agentId = "main";
       params.command = { ...params.command, senderId: "UOWNER" };
       params.sessionCtx = { ...params.sessionCtx, SenderId: "UOWNER", ChatType: chatType };
       params.ctx = { ...params.ctx, ChatType: chatType };
