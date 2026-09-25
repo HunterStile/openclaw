@@ -39,6 +39,7 @@ import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import { resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -52,6 +53,7 @@ export async function runAgentsApiAttempt(
     sessionKey: string;
     storePath: string;
   },
+  readPluginConfig: () => unknown,
 ): Promise<AgentHarnessAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -198,6 +200,7 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
+    const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -205,17 +208,23 @@ export async function runAgentsApiAttempt(
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
+    const sessionIdentity = [
+      params.model.id,
+      params.resolvedApiKey,
+      // Hosted settings preserve the identity of existing saved sessions.
+      ...(environment.type === "self_hosted" ? [environment] : []),
+    ];
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
+      .update(JSON.stringify(sessionIdentity))
       .digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
       // Normalize bindings created by the unmerged tools implementation.
       const toolsFingerprint = createHash("sha256")
         .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
         .digest("hex");
-      if (binding.authFingerprint !== toolsFingerprint) {
+      if (environment.type !== "openai_hosted" || binding.authFingerprint !== toolsFingerprint) {
         throw new Error(
-          "Agents API model or credential changed; reset the OpenClaw session before continuing",
+          "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
         );
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
@@ -226,8 +235,12 @@ export async function runAgentsApiAttempt(
       remoteSessionId = await client.create(
         controller.signal,
         [
-          "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
-          "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
+          environment.type === "openai_hosted"
+            ? "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files."
+            : `You are the OpenClaw assistant. Use your self-hosted workspace at ${JSON.stringify(environment.workspace_directory)} for commands and files.`,
+          environment.type === "openai_hosted"
+            ? "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files."
+            : "OpenClaw functions run in the Gateway; your connected self-hosted executor owns shell commands and workspace files.",
           "Apps, connectors, file transfers, and image generation are unavailable.",
           params.extraSystemPrompt,
         ]
@@ -236,6 +249,7 @@ export async function runAgentsApiAttempt(
         params.model.id,
         {
           functions: surface.declarations,
+          environment,
           reasoning: {
             effort: reasoningEffort,
             ...(params.reasoningLevel && params.reasoningLevel !== "off"
