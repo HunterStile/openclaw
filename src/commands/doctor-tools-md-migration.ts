@@ -1,8 +1,8 @@
 /** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -42,10 +42,6 @@ type MigrationFileSnapshot = {
   content: string;
   stat?: syncFs.Stats;
 };
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
 
 async function readMigrationFileSnapshot(params: {
   filePath: string;
@@ -111,13 +107,9 @@ async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefi
   return {
     path: toolsPath,
     content: snapshot.content,
-    sha256: sha256(snapshot.content),
+    sha256: sha256Hex(snapshot.content),
     stat: snapshot.stat,
   };
-}
-
-function migratedBlock(content: string): string {
-  return `${MIGRATED_SUBSECTION_HEADING}\n\n${content}`;
 }
 
 function appendWithSpacing(before: string, addition: string, after = ""): string {
@@ -148,7 +140,7 @@ function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): 
       mergedAgentsContent.slice(insertAt),
     );
   }
-  const block = migratedBlock(toolsContent);
+  const block = `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
   const toolsSection = findToolsSection(mergedAgentsContent);
   if (!toolsSection) {
     return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
@@ -291,7 +283,7 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
     filePath: source.path,
     label: "TOOLS.md",
   });
-  if (sha256(current.content) !== source.sha256) {
+  if (sha256Hex(current.content) !== source.sha256) {
     throw new Error("TOOLS.md changed during migration");
   }
   // The original bytes are durable in both the archive and merged AGENTS.md;
@@ -349,7 +341,7 @@ async function archiveSource(params: {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
     }
-    if (sha256(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
+    if (sha256Hex(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }

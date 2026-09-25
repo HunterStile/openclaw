@@ -106,6 +106,10 @@ export async function beginDoctorMaintenance(params: {
     | undefined;
   const coordinators: Array<{ release(): void }> = [];
   const warnings: string[] = [];
+  const warn = (message: string) => {
+    warnings.push(message);
+    params.runtime.log(message);
+  };
   const failureFacts: UpdateFailureFact[] = [];
   let repairStoresMayBeOpen = false;
   // Service safety outlives database handles released for an update child.
@@ -215,12 +219,11 @@ export async function beginDoctorMaintenance(params: {
     });
   };
   const finish = async (
-    initialConfig: OpenClawConfig,
+    cfg: OpenClawConfig,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission = assertUpdateAdmissionCurrent,
   ) => {
-    let cfg = initialConfig;
     await release(assertCustody);
     assertCustody?.();
     const before = stopped;
@@ -249,8 +252,7 @@ export async function beginDoctorMaintenance(params: {
               port: before.servicePort,
             },
           );
-          warnings.push(message);
-          params.runtime.log(message);
+          warn(message);
           return;
         }
       }
@@ -260,8 +262,7 @@ export async function beginDoctorMaintenance(params: {
         before.serviceUpdateVerdict?.kind === "owned"
       ) {
         const warning = `Gateway was already stopped before repair; repair did not start it. Run ${formatCliCommand("openclaw gateway start", env)} to bring it online.`;
-        warnings.push(warning);
-        params.runtime.log(warning);
+        warn(warning);
       }
       return;
     }
@@ -296,12 +297,11 @@ export async function beginDoctorMaintenance(params: {
         assertRestoreAdmission,
         assertInstallationAdmission: assertUpdateAdmissionCurrent,
       });
-      cfg = restoredConfig;
       if (!state) {
         return;
       }
       const port = await resolveUpdatedGatewayRestartPort({
-        config: cfg,
+        config: restoredConfig,
         serviceEnv: state.env,
         serviceCommand: state.command,
       });
@@ -322,8 +322,7 @@ export async function beginDoctorMaintenance(params: {
       );
       if (health.waitOutcome === "still-starting") {
         const warning = renderRestartDiagnostics(health).join(" ");
-        warnings.push(warning);
-        params.runtime.log(warning);
+        warn(warning);
         return;
       }
       if (!health.healthy) {
@@ -381,8 +380,7 @@ export async function beginDoctorMaintenance(params: {
     params.runtime.log("Gateway restarted and verified after Doctor repair.");
     if (staleReplacement) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
-      warnings.push(warning);
-      params.runtime.log(warning);
+      warn(warning);
     }
   };
   const admitRepair = async () => {
@@ -415,8 +413,7 @@ export async function beginDoctorMaintenance(params: {
             ownershipError.family === "gateway-lifecycle"
               ? `Warning: The stopped Gateway still owns gateway-lifecycle after the service stop deadline. Shared-state repair is unsafe while that writer remains active. Restoring its service; run ${formatCliCommand("openclaw gateway status --deep", env)}, then retry ${formatCliCommand("openclaw doctor --fix", env)} after shutdown completes.`
               : `Warning: Doctor could not reacquire maintenance ownership: ${String(ownershipError)} Restoring its service without repairing shared state.`;
-          warnings.push(warning);
-          params.runtime.log(warning);
+          warn(warning);
         }
         const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
@@ -565,18 +562,14 @@ export async function beginDoctorMaintenance(params: {
                         expectedService: inspection,
                         retainNativeIdentity: true,
                         assertCurrent: () => assertServiceCurrent?.(),
-                        warn: (message) => {
-                          warnings.push(message);
-                          params.runtime.log(message);
-                        },
+                        warn,
                         onStopped: (before) => {
                           stopped = before;
                         },
                       });
                       assertDoctorMaintenanceInspection(stopped, env);
                       if (stopped.serviceUpdateVerdict?.kind === "unavailable") {
-                        warnings.push(stopped.serviceUpdateVerdict.message);
-                        params.runtime.log(stopped.serviceUpdateVerdict.message);
+                        warn(stopped.serviceUpdateVerdict.message);
                       }
                       if (staleReplacement && stopped.serviceEnv) {
                         await assertStaleDoctorGatewayStopped({
@@ -614,8 +607,7 @@ export async function beginDoctorMaintenance(params: {
             );
           }
         } else if (inspection.serviceUpdateVerdict?.kind === "unavailable") {
-          warnings.push(inspection.serviceUpdateVerdict.message);
-          params.runtime.log(inspection.serviceUpdateVerdict.message);
+          warn(inspection.serviceUpdateVerdict.message);
         } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
           params.runtime.log(
             "The stopped Gateway service was left unchanged; repairing Doctor's selected state only.",

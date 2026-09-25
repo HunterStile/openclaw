@@ -383,20 +383,20 @@ export function maybeRepairStalePluginConfig(
 
   const next = structuredClone(cfg);
   const nextPlugins = asNullableRecord(next.plugins);
-
-  const allowIds = hits.filter((hit) => hit.surface === "allow").map((hit) => hit.pluginId);
-  if (allowIds.length > 0 && Array.isArray(nextPlugins?.allow)) {
-    const staleAllowIds = new Set(allowIds.map((pluginId) => normalizePluginId(pluginId)));
-    nextPlugins.allow = nextPlugins.allow.filter(
-      (pluginId) => typeof pluginId !== "string" || !staleAllowIds.has(normalizePluginId(pluginId)),
-    );
-  }
-
-  const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
-  if (denyIds.length > 0 && Array.isArray(nextPlugins?.deny)) {
-    const staleDenyIds = new Set(denyIds.map((pluginId) => normalizePluginId(pluginId)));
-    nextPlugins.deny = nextPlugins.deny.filter(
-      (pluginId) => typeof pluginId !== "string" || !staleDenyIds.has(normalizePluginId(pluginId)),
+  const changes: string[] = [];
+  for (const surface of ["allow", "deny"] as const) {
+    const ids = hits.filter((hit) => hit.surface === surface).map((hit) => hit.pluginId);
+    if (ids.length === 0) {
+      continue;
+    }
+    if (Array.isArray(nextPlugins?.[surface])) {
+      const staleIds = new Set(ids.map(normalizePluginId));
+      nextPlugins[surface] = nextPlugins[surface].filter(
+        (pluginId) => typeof pluginId !== "string" || !staleIds.has(normalizePluginId(pluginId)),
+      );
+    }
+    changes.push(
+      `- plugins.${surface}: removed ${ids.length} stale plugin id${ids.length === 1 ? "" : "s"} (${ids.join(", ")})`,
     );
   }
 
@@ -434,17 +434,6 @@ export function maybeRepairStalePluginConfig(
     removeDanglingChannelReferences(next, channelIds);
   }
 
-  const changes: string[] = [];
-  if (allowIds.length > 0) {
-    changes.push(
-      `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
-    );
-  }
-  if (denyIds.length > 0) {
-    changes.push(
-      `- plugins.deny: removed ${denyIds.length} stale plugin id${denyIds.length === 1 ? "" : "s"} (${denyIds.join(", ")})`,
-    );
-  }
   if (entryIds.length > 0) {
     changes.push(
       `- plugins.entries: removed ${entryIds.length} stale plugin entr${entryIds.length === 1 ? "y" : "ies"} (${entryIds.join(", ")})`,
