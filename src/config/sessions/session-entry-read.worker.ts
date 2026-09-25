@@ -59,7 +59,7 @@ export function readExactSessionEntriesWithLifecycle(
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -77,6 +77,7 @@ export function readExactSessionEntriesWithLifecycle(
                   creation: {
                     ...readSessionCreationSnapshotInDatabase(database, sessionKey),
                     databaseIdentity: identity,
+                    databasePath: filename,
                   },
                 };
               }
