@@ -10,7 +10,9 @@ const { fetchWithSsrFGuardMock, prepareAgentWorkspaceContextMock } = vi.hoisted(
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
   prepareAgentWorkspaceContextMock:
-    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime" ).prepareAgentWorkspaceContext>(),
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime").prepareAgentWorkspaceContext
+    >(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
