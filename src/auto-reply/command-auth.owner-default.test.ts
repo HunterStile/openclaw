@@ -4,11 +4,29 @@ import { describe, expect, it } from "vitest";
 import { resolveOwnerPromptNumbers } from "../agents/owner-display.js";
 import { buildAgentSystemPrompt } from "../agents/system-prompt.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isResetAuthorizedForContext, resolveCommandAuthorization } from "./command-auth.js";
+import {
+  isConfiguredCommandOwner,
+  isResetAuthorizedForContext,
+  resolveCommandAuthorization,
+} from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
+
+describe("live configured owner authorization", () => {
+  it("requires a matching explicit channel owner and observes removal", () => {
+    const cfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["slack:UOWNER", "*"] },
+      channels: { slack: { allowFrom: ["UALLOWED"] } },
+    };
+    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UOWNER" })).toBe(true);
+    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UALLOWED" })).toBe(false);
+    expect(isConfiguredCommandOwner(cfg, { channel: "discord", senderId: "UOWNER" })).toBe(false);
+    cfg.commands!.ownerAllowFrom = [];
+    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UOWNER" })).toBe(false);
+  });
+});
 
 describe("senderIsOwner only reflects explicit owner authorization", () => {
   it.each([{ allowFrom: ["*"] }, { allowFrom: ["456"] }])(

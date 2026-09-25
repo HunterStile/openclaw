@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -4996,6 +4997,37 @@ describe("runPreparedReply media-only handling", () => {
       [],
     );
   });
+
+  it.each(["direct", "group"] as const)(
+    "admits a live configured owner's management capability from a Slack %s conversation",
+    async (chatType) => {
+      const params = ownerParams();
+      params.command = { ...params.command, senderId: "UOWNER" };
+      params.sessionCtx = { ...params.sessionCtx, SenderId: "UOWNER", ChatType: chatType };
+      params.ctx = { ...params.ctx, ChatType: chatType };
+      params.sessionKey =
+        chatType === "direct"
+          ? "agent:main:slack:direct:user:uowner"
+          : "agent:main:slack:channel:c123:thread:123.456";
+      const cfg = { commands: { ownerAllowFrom: ["slack:UOWNER"] } };
+      setRuntimeConfigSnapshot(cfg);
+      try {
+        await runPreparedReply(params);
+        const capability = requireRunReplyAgentCall().opts?.cronCreatorAuthorityCapability;
+        expect(capability?.callerOrigin).toEqual({ kind: "external", channel: "slack" });
+        const entitlement = capability?.managementEntitlement;
+        expect(entitlement?.source).toBe("channel-owner");
+        if (entitlement?.source !== "channel-owner") {
+          throw new Error("expected channel owner management entitlement");
+        }
+        expect(entitlement.isCurrent()).toBe(true);
+        setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
+        expect(entitlement.isCurrent()).toBe(false);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("keeps sender ownership when queued system events are prepended", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
