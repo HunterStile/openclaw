@@ -23,6 +23,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refresh.test-support.js";
 import {
   captureCodexAppServerClientLifetime,
   captureSharedCodexAppServerCatalogLifetime,
@@ -43,6 +44,8 @@ export function registerSharedClientLifetimeTests(
   redirectNextStartToWebSocket: () => void,
   rejectAuth: (error: Error) => void,
 ) {
+  registerSharedClientAuthRefreshTests();
+
   it.each(["shared", "isolated"] as const)(
     "joins %s transport startup and closes a client returned after its deadline",
     async (kind) => {
