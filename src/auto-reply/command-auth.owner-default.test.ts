@@ -17,14 +17,14 @@ installDiscordRegistryHooks();
 describe("live configured owner authorization", () => {
   it("requires a matching explicit channel owner and observes removal", () => {
     const cfg: OpenClawConfig = {
-      commands: { ownerAllowFrom: ["slack:UOWNER", "*"] },
-      channels: { slack: { allowFrom: ["UALLOWED"] } },
+      commands: { ownerAllowFrom: ["discord:456", "*"] },
+      channels: { discord: { allowFrom: ["123"] } },
     };
-    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UOWNER" })).toBe(true);
-    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UALLOWED" })).toBe(false);
-    expect(isConfiguredCommandOwner(cfg, { channel: "discord", senderId: "UOWNER" })).toBe(false);
+    expect(isConfiguredCommandOwner(cfg, { channel: "discord", senderId: "456" })).toBe(true);
+    expect(isConfiguredCommandOwner(cfg, { channel: "discord", senderId: "123" })).toBe(false);
+    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "456" })).toBe(false);
     cfg.commands!.ownerAllowFrom = [];
-    expect(isConfiguredCommandOwner(cfg, { channel: "slack", senderId: "UOWNER" })).toBe(false);
+    expect(isConfiguredCommandOwner(cfg, { channel: "discord", senderId: "456" })).toBe(false);
   });
 });
 

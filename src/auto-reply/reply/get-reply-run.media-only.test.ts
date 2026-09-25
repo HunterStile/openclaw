@@ -12,7 +12,16 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
@@ -5010,6 +5019,18 @@ describe("runPreparedReply media-only handling", () => {
           ? "agent:main:slack:direct:user:uowner"
           : "agent:main:slack:channel:c123:thread:123.456";
       const cfg = { commands: { ownerAllowFrom: ["slack:UOWNER"] } };
+      const registry = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            plugin: createChannelTestPluginBase({ id: "slack" }),
+            source: "test",
+          },
+        ]),
+        null,
+        "default",
+      );
       setRuntimeConfigSnapshot(cfg);
       try {
         await runPreparedReply(params);
@@ -5025,6 +5046,7 @@ describe("runPreparedReply media-only handling", () => {
         expect(entitlement.isCurrent()).toBe(false);
       } finally {
         clearRuntimeConfigSnapshot();
+        rollbackStagedPluginRegistry(registry);
       }
     },
   );
