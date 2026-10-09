@@ -59,63 +59,113 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    if (stream !== "tool") {
+    if (stream !== "tool" && stream !== "item") {
       return;
     }
-    const phase = data.phase as string | undefined;
-    const name = data.name as string | undefined;
-    const toolCallId = data.toolCallId as string | undefined;
-    if (!toolCallId) {
-      return;
-    }
-
     const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
 
     let update: SessionUpdate;
-    if (phase === "start") {
-      if (!pending.toolCalls) {
-        pending.toolCalls = new Map();
-      }
-      if (pending.toolCalls.has(toolCallId)) {
+    if (stream === "item") {
+      const { progressText } = data;
+      const itemId = typeof data.itemId === "string" ? data.itemId : "";
+      if (
+        data.kind !== "preamble" ||
+        (data.phase !== "update" && data.phase !== "end") ||
+        typeof progressText !== "string" ||
+        !progressText
+      ) {
         return;
       }
-      const args = data.args as Record<string, unknown> | undefined;
-      const title = formatToolTitle(name, args);
-      const kind = inferToolKind(name);
-      const locations = extractToolCallLocations(args);
-      pending.toolCalls.set(toolCallId, {
-        title,
-        kind,
-        locations,
-      });
-      update = {
-        sessionUpdate: "tool_call",
-        toolCallId,
-        title,
-        status: "in_progress",
-        rawInput: args,
-        kind,
-        locations,
-      };
-    } else if (phase === "update" || phase === "result") {
-      const toolState = pending.toolCalls?.get(toolCallId);
-      const result = phase === "update" ? data.partialResult : data.result;
-      if (phase === "result") {
-        pending.toolCalls?.delete(toolCallId);
+      const sentPreambles = (pending.sentPreambles ??= new Map());
+      const sent = sentPreambles.get(itemId) ?? "";
+      if (progressText.length <= sent.length) {
+        return;
+      }
+      let text = progressText.slice(sent.length);
+      const reclassifiedText = pending.reclassifiedText;
+      if (reclassifiedText) {
+        pending.reclassifiedText = undefined;
+        // Chat projections add up to two boundary newlines between items.
+        // Preserve provider whitespace when matching already-delivered text.
+        for (let separatorLength = 0; separatorLength <= (sent ? 0 : 2); separatorLength++) {
+          const credited = reclassifiedText.slice(separatorLength);
+          if (text.startsWith(credited)) {
+            text = text.slice(credited.length);
+            break;
+          }
+          if (credited.startsWith(text)) {
+            pending.reclassifiedText = credited.slice(text.length) || undefined;
+            text = "";
+            break;
+          }
+          if (reclassifiedText[separatorLength] !== "\n") {
+            break;
+          }
+        }
+      }
+      // Reserve before delivery: Gateway callbacks can overlap while ACP writes await.
+      // Retain completed items until prompt cleanup to deduplicate repeated end frames.
+      sentPreambles.set(itemId, progressText);
+      if (!text) {
+        return;
       }
       update = {
-        sessionUpdate: "tool_call_update",
-        toolCallId,
-        status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
-        rawOutput: result,
-        content: extractToolCallContent(result),
-        locations: extractToolCallLocations(toolState?.locations, result),
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
       };
     } else {
-      return;
+      const phase = data.phase as string | undefined;
+      const name = data.name as string | undefined;
+      const toolCallId = data.toolCallId as string | undefined;
+      if (!toolCallId) {
+        return;
+      }
+      pending.reclassifiedText = undefined;
+      if (phase === "start") {
+        if (!pending.toolCalls) {
+          pending.toolCalls = new Map();
+        }
+        if (pending.toolCalls.has(toolCallId)) {
+          return;
+        }
+        const args = data.args as Record<string, unknown> | undefined;
+        const title = formatToolTitle(name, args);
+        const kind = inferToolKind(name);
+        const locations = extractToolCallLocations(args);
+        pending.toolCalls.set(toolCallId, {
+          title,
+          kind,
+          locations,
+        });
+        update = {
+          sessionUpdate: "tool_call",
+          toolCallId,
+          title,
+          status: "in_progress",
+          rawInput: args,
+          kind,
+          locations,
+        };
+      } else if (phase === "update" || phase === "result") {
+        const toolState = pending.toolCalls?.get(toolCallId);
+        const result = phase === "update" ? data.partialResult : data.result;
+        if (phase === "result") {
+          pending.toolCalls?.delete(toolCallId);
+        }
+        update = {
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
+          rawOutput: result,
+          content: extractToolCallContent(result),
+          locations: extractToolCallLocations(toolState?.locations, result),
+        };
+      } else {
+        return;
+      }
     }
     await this.sessionUpdates.emit({
       sessionId: pending.sessionId,

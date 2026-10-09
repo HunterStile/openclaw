@@ -468,7 +468,11 @@ export class AcpTranslatorPromptStream {
     if (isRecord(messageData) && (state === "delta" || state === "final")) {
       pending.streamMessage = messageData;
       // Consume the terminal snapshot before settling the append-only ACP stream.
-      const ownsSnapshot = await this.handleDeltaEvent(pending, messageData);
+      const ownsSnapshot = await this.handleDeltaEvent(
+        pending,
+        messageData,
+        state === "delta" && payload.replace === true,
+      );
       if (
         !ownsSnapshot ||
         this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending ||
@@ -500,6 +504,7 @@ export class AcpTranslatorPromptStream {
   private async handleDeltaEvent(
     pending: AcpPendingPrompt,
     messageData: Record<string, unknown>,
+    replace: boolean,
   ): Promise<boolean> {
     const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const sessionId = pending.sessionId;
@@ -516,9 +521,22 @@ export class AcpTranslatorPromptStream {
         .map((block) => block[field] ?? "")
         .join("\n")
         .trimEnd();
-      const sentSoFar = pending[sentField]?.length ?? 0;
+      const previousText = pending[sentField] ?? "";
+      if (sentField === "sentText" && fullText !== undefined) {
+        if (replace && fullText.length < previousText.length && previousText.startsWith(fullText)) {
+          // ACP is append-only: credit withdrawn text to the following preambles
+          // while tracking the Gateway's shorter final-answer projection.
+          pending.reclassifiedText = previousText.slice(fullText.length);
+          pending.sentText = fullText;
+          continue;
+        }
+      }
+      const sentSoFar = previousText.length;
       if (!fullText || fullText.length <= sentSoFar) {
         continue;
+      }
+      if (sentField === "sentText") {
+        pending.reclassifiedText = undefined;
       }
       pending[sentField] = fullText;
       await this.emitPromptChunk(pending, kind, fullText.slice(sentSoFar));

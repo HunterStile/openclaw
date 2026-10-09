@@ -1,7 +1,12 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createSessionAgentHarness,
+  promptAgent,
+} from "../acp/translator.prompt-harness.test-support.js";
 import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
+import type { GatewayClient } from "../gateway/client.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -13,11 +18,11 @@ type TestAssistant = Pick<AssistantMessage, "role" | "content"> &
   Partial<Pick<AssistantMessage, "api" | "stopReason" | "openclawDelivery">> & {
     phase?: "commentary" | "final_answer";
   };
-function commentaryHarness(options: Options) {
+function commentaryHarness(options: Options, clientRunId = "run") {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-05-09T00:00:00.000Z"));
   const gateway = createAgentEventTestHarness();
-  gateway.register("run", "main", "run");
+  gateway.register("run", "main", clientRunId);
   const unsubscribe = subscribeAgentEvents((event) => {
     if (event.runId === "run") {
       return gateway.handler(event);
@@ -103,7 +108,20 @@ describe("commentary preambles", () => {
         content: [textBlock(narration, "commentary-0", "commentary"), toolBlock("exec_0", "exec")],
       };
       update(emit, commentary, { type: "toolcall_start", contentIndex: 1, partial: commentary });
-      emit({ type: "message_end", message: commentary });
+      const nextCommentary: TestAssistant = {
+        ...commentary,
+        content: [
+          ...commentary.content,
+          textBlock(narration, "commentary-1", "commentary"),
+          toolBlock("exec_1", "exec"),
+        ],
+      };
+      update(emit, nextCommentary, {
+        type: "toolcall_start",
+        contentIndex: 3,
+        partial: nextCommentary,
+      });
+      emit({ type: "message_end", message: nextCommentary });
       await subscription.waitForPendingEvents();
       await drain();
       const events = onAgentEvent.mock.calls.map(([event]) => event);
@@ -126,7 +144,20 @@ describe("commentary preambles", () => {
         },
         {
           stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            phase: "update",
+            progressText: narration,
+          },
+        },
+        {
+          stream: "item",
           data: { kind: "preamble", itemId: "commentary-0", phase: "end", progressText: narration },
+        },
+        {
+          stream: "item",
+          data: { kind: "preamble", itemId: "commentary-1", phase: "end", progressText: narration },
         },
       ]);
       expect(await snapshot()).toBe("");
@@ -141,6 +172,79 @@ describe("commentary preambles", () => {
       expect(await snapshot()).toBe("Next answer.");
     },
   );
+
+  it("delivers reclassified aggregate narration once through the Gateway and ACP bridge", async () => {
+    const sent = createDeferred<string>();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        if (typeof params?.idempotencyKey !== "string") {
+          throw new Error("missing run ID");
+        }
+        sent.resolve(params.idempotencyKey);
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const acp = createSessionAgentHarness(request);
+    const prompt = promptAgent(acp.agent);
+    const runId = await sent.promise;
+    const onAgentEvent = vi.fn();
+    const source = commentaryHarness({ onAgentEvent }, runId);
+    let forwarded = 0;
+    const forward = async () => {
+      await source.subscription.waitForPendingEvents();
+      await source.snapshot();
+      for (const [event, payload] of source.broadcast.mock.calls.slice(forwarded)) {
+        forwarded++;
+        await acp.agent.handleGatewayEvent({ type: "event", event, payload });
+      }
+    };
+    const provisional = textMessage("Work\nWork", "anthropic-messages");
+    source.emit({ type: "message_start", message: provisional });
+    update(source.emit, provisional, { type: "text_delta", delta: "Work\nWork" });
+    await forward();
+    const firstBlock = textBlock("Work", "commentary-0", "commentary");
+    const commentary: TestAssistant = {
+      role: "assistant",
+      api: "anthropic-messages",
+      stopReason: "toolUse",
+      content: [
+        firstBlock,
+        textBlock("Work", "commentary-1", "commentary"),
+        toolBlock("tool-0", "read"),
+      ],
+    };
+    update(source.emit, commentary, {
+      type: "toolcall_start",
+      contentIndex: 2,
+      partial: commentary,
+    });
+    await forward();
+    const extended: TestAssistant = {
+      ...commentary,
+      content: [firstBlock, textBlock("Working", "commentary-1", "commentary")],
+    };
+    update(source.emit, extended, { type: "text_delta", delta: "ing", partial: extended });
+    source.emit({ type: "message_end", message: extended });
+    await forward();
+    await acp.agent.handleGatewayEvent({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "main",
+        runId,
+        state: "final",
+        message: { content: [{ type: "text", text: "Done" }] },
+      },
+    });
+    await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
+    expect(
+      acp.sessionUpdate.mock.calls.flatMap(([notification]) =>
+        notification.update.sessionUpdate === "agent_message_chunk"
+          ? [notification.update.content.text]
+          : [],
+      ),
+    ).toEqual(["Work\nWork", "ing", "Done"]);
+  });
 
   it.each([
     { phaseKnownAt: "text_delta", deferred: false },

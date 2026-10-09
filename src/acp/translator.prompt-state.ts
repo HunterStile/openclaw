@@ -18,6 +18,8 @@ export type AcpPendingPrompt = {
   reject: (err: Error) => void;
   sentText?: string;
   sentThought?: string;
+  sentPreambles?: Map<string, string>;
+  reclassifiedText?: string;
   streamMessage?: unknown;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };

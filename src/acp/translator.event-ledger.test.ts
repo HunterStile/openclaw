@@ -69,6 +69,7 @@ const replayTypes = [
   "session_info_update",
   "available_commands_update",
   "user_message_chunk",
+  "agent_message_chunk",
   "tool_call",
   "tool_call_update",
   "agent_message_chunk",
@@ -92,6 +93,21 @@ describe("ACP translator event ledger replay", () => {
     const prompt = first.agent.prompt(createPromptRequest(sessionId, "Question"));
     const runId = await first.sent.promise;
     await recorded.promise;
+    await first.agent.handleGatewayEvent({
+      type: "event",
+      event: "agent",
+      payload: {
+        sessionKey: ref.sessionKey,
+        runId,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "preamble-1",
+          phase: "end",
+          progressText: "Reading the file.",
+        },
+      },
+    });
     for (const phase of ["start", "result"]) {
       await first.agent.handleGatewayEvent({
         type: "event",
@@ -123,7 +139,11 @@ describe("ACP translator event ledger replay", () => {
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "Question" },
     });
-    expect(updates[5]).toEqual({
+    expect(updates[3]).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Reading the file." },
+    });
+    expect(updates[6]).toEqual({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "Answer" },
     });
@@ -139,6 +159,7 @@ describe("ACP translator event ledger replay", () => {
     expect(
       listed.updates.mock.calls.map(([notification]) => notification.update.sessionUpdate),
     ).toEqual(replayTypes);
+    expect(listed.updates.mock.calls[3]?.[0].update).toEqual(updates[3]);
     const followUpRecorded = createDeferred();
     vi.mocked(ledger.recordUserPrompt).mockImplementation(async (params) => {
       await recordPrompt(params);

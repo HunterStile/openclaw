@@ -11,7 +11,10 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
+import {
+  parseAssistantTextSignature,
+  readAssistantTextBlocksForPhase,
+} from "../shared/chat-message-content.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
@@ -170,29 +173,41 @@ export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
   finalMessage = false,
-  preparedText?: string,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
-  // Non-text updates carry prior Responses items too; publish only the active item.
-  const commentaryMessage = isResponsesCommentary
-    ? scopeAssistantMessageToStreamBlock(message, index, itemId)
-    : message;
-  const text =
-    !isResponsesCommentary && preparedText !== undefined
-      ? preparedText
-      : extractAssistantCommentaryText(commentaryMessage);
-  if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
-    // Generic commentary must carry the identity the phase tagger generated so
-    // the Control UI can key the live row to the persisted fallback row; without
-    // it every generic segment is unkeyed and survives as a duplicate.
-    const commentaryItemId = isResponsesCommentary
-      ? itemId
-      : resolveAssistantStreamItemId({ message });
-    ctx.emitAssistantStreamData(
-      { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
-      { finalMessage },
+  const commentaryMessages = new Map<string | undefined, AssistantMessage>();
+  if (isResponsesCommentary) {
+    // Non-text updates carry prior Responses items too; publish only the active item.
+    commentaryMessages.set(itemId, scopeAssistantMessageToStreamBlock(message, index, itemId));
+  } else if (Array.isArray(message.content)) {
+    const commentaryBlocks = new Set<unknown>(
+      readAssistantTextBlocksForPhase(message, "commentary"),
     );
+    for (const block of message.content) {
+      if (block.type !== "text" || !commentaryBlocks.has(block)) {
+        continue;
+      }
+      const id = parseAssistantTextSignature(block)?.id;
+      const commentaryMessage = commentaryMessages.get(id);
+      if (commentaryMessage) {
+        commentaryMessage.content.push(block);
+      } else {
+        // Cumulative snapshots belong to one item, even when the message carries older items.
+        commentaryMessages.set(id, { ...message, content: [block] });
+      }
+    }
+  } else {
+    commentaryMessages.set(undefined, message);
+  }
+  for (const [commentaryItemId, commentaryMessage] of commentaryMessages) {
+    const text = extractAssistantCommentaryText(commentaryMessage);
+    if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
+      ctx.emitAssistantStreamData(
+        { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
+        { finalMessage },
+      );
+    }
   }
 }
 
